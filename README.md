@@ -14,4 +14,7 @@ Use **SimpleSpy** (or any remote spy) to grab it:
 
 1. Load SimpleSpy in your executor:
    ```lua
-   loadstring(game:HttpGet("https://scriptblox.com/raw/Universal-Script-Simple-Spy-V3-Mobile-53593"))()
+   loadstring(game:HttpGet("https://raw.githubusercontent.com/ActiniumScripts/SimpleSpy/main/SimpleSpy.lua"))()
+   ```
+
+> If you want the other version that's better, the one that gets the Egg ID for you, join the Discord: https://discord.gg/AqXkxYPbfu
