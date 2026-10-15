@@ -14,4 +14,4 @@ Use **SimpleSpy** (or any remote spy) to grab it:
 
 1. Load SimpleSpy in your executor:
    ```lua
-   loadstring(game:HttpGet("https://raw.githubusercontent.com/ActiniumScripts/SimpleSpy/main/SimpleSpy.lua"))()
+   loadstring(game:HttpGet("https://scriptblox.com/raw/Universal-Script-Simple-Spy-V3-Mobile-53593"))()
