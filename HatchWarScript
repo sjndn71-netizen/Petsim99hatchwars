@@ -1,0 +1,339 @@
+-- ============================================
+-- Hatch Wars Auto Farm — (Houses 1-8)
+-- ============================================
+
+local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+local Window = Rayfield:CreateWindow({
+    Name = "Hatch Wars Grinder",
+    LoadingTitle = "Auto Farm",
+    LoadingSubtitle = "by PHT",
+    ConfigurationSaving = { Enabled = false },
+    KeySystem = false,
+})
+
+local MainTab = Window:CreateTab("Main", nil)
+MainTab:CreateSection("Auto Farm")
+
+Rayfield:Notify({
+    Title = "Loaded",
+    Content = "Hatch Wars Auto Farm v4 ready (Houses 1-8).",
+    Duration = 5,
+    Image = 4483362458,
+})
+
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Workspace = game:GetService("Workspace")
+local VirtualInputManager = game:GetService("VirtualInputManager")
+
+-- ============================================
+-- CONFIG
+-- ============================================
+local CONFIG = {
+    MaxHouse         = 8,
+    PostKnockDelay   = 3,
+    SettleTime       = 0.4,
+    RetryDelay       = 2,
+    SpawnOffset      = 3,
+    FallbackCooldown = 420,
+    IdlePosition     = Vector3.new(7537.4404296875, 16.33778953552246, 21978.453125),
+
+    EggId            = "35de75eb0c5a4a39ac1201fb73d9adc9",
+    EggAmount        = 15,
+    HatchCycleDelay  = 0.2,     -- pause between tap bursts
+
+    TapGap           = 0.15,    -- gap between each tap
+    TapHoldTime      = 0.02,    -- how long each tap is held
+    TapCount         = 6,       -- 6 taps per burst
+    EggScreenPos     = nil,     -- nil = screen center, or {X=..., Y=...}
+}
+
+local Network = ReplicatedStorage:WaitForChild("Network", 10)
+local KnockRemote = Network and Network:WaitForChild("Instancing_InvokeCustomFromClient", 10)
+
+if not KnockRemote then
+    Rayfield:Notify({ Title = "Error", Content = "Knock remote not found.", Duration = 8 })
+    error("[AutoFarm] KnockRemote unavailable")
+end
+
+local HatchRemote = nil
+do
+    local ok, r = pcall(function()
+        return ReplicatedStorage.Network:WaitForChild("CustomEggs_Hatch", 5)
+    end)
+    if ok and r then
+        HatchRemote = r
+        print("[AutoFarm] Hatch remote found:", r.ClassName)
+    else
+        warn("[AutoFarm] CustomEggs_Hatch NOT found — hatch remote disabled.")
+    end
+end
+
+local HouseDoors = {
+    [1] = Vector3.new(7486.20068359375, 19.17623519897461, 21921.486328125),
+    [2] = Vector3.new(7486.1953125, 18.925161361694336, 22077.703125),
+    [3] = Vector3.new(7542.45458984375, 19.392318725585938, 21921.8671875),
+    [4] = Vector3.new(7534.96337890625, 19.918901443481445, 22078.880859375),
+    [5] = Vector3.new(7593.3310546875, 21.369260787963867, 21918.44140625),
+    [6] = Vector3.new(7577.3544921875, 16.977046966552734, 22078.2734375),
+    [7] = Vector3.new(7636.7841796875, 16.65741729736328, 21923.14453125),
+    [8] = Vector3.new(7633.90869140625, 18.137056350708008, 22081.087890625),
+}
+
+local nextReady = {}
+for i = 1, CONFIG.MaxHouse do nextReady[i] = 0 end
+local idleStanding = false
+
+local function nextDueHouse()
+    local best, bestTime = nil, math.huge
+    for i = 1, CONFIG.MaxHouse do
+        if nextReady[i] < bestTime then
+            best, bestTime = i, nextReady[i]
+        end
+    end
+    return best, bestTime
+end
+
+local function parseTimeText(text)
+    if type(text) ~= "string" then return nil end
+    text = text:gsub("%s", "")
+    local h, m, s = text:match("^(%d+):(%d+):(%d+)$")
+    if h then return (tonumber(h) * 3600) + (tonumber(m) * 60) + tonumber(s) end
+    local m2, s2 = text:match("^(%d+):(%d+)$")
+    if m2 then return (tonumber(m2) * 60) + tonumber(s2) end
+    return nil
+end
+
+local function readDoorTimer(num)
+    local ok, secs = pcall(function()
+        local doors = Workspace
+            :WaitForChild("__THINGS", 5)
+            :WaitForChild("__INSTANCE_CONTAINER", 5)
+            :WaitForChild("Active", 5)
+            :WaitForChild("HatchWar", 5)
+            :WaitForChild("INTERACT", 5)
+            :WaitForChild("Doors", 5)
+        local door = doors:FindFirstChild(tostring(num))
+        if not door then return nil end
+        local billboard = door:FindFirstChild("HatchWarHouseBillboard", true)
+        if not billboard then return nil end
+        local house = billboard:FindFirstChild("HatchWarHouse", true)
+        if not house then return nil end
+        local price = house:FindFirstChild("Price", true)
+        if not price then return nil end
+        local label = price:FindFirstChild("Amount")
+        if not label then return nil end
+        return parseTimeText(label.Text)
+    end)
+    return ok and secs or nil
+end
+
+local function syncTimersFromUI()
+    for i = 1, CONFIG.MaxHouse do
+        local secs = readDoorTimer(i)
+        if secs then nextReady[i] = time() + secs end
+    end
+end
+
+local function getRoot()
+    local char = LocalPlayer.Character
+    if not char then return nil end
+    return char:FindFirstChild("HumanoidRootPart")
+end
+
+local function teleportTo(pos)
+    local root = getRoot()
+    if not root then return false end
+    root.CFrame = CFrame.new(pos + Vector3.new(0, CONFIG.SpawnOffset, 0))
+    return true
+end
+
+local function knockHouse(num)
+    local pos = HouseDoors[num]
+    if pos and not teleportTo(pos) then return false end
+    task.wait(CONFIG.SettleTime)
+
+    local ok, err = pcall(function()
+        KnockRemote:InvokeServer("HatchWar", "HD_Ping", num)
+    end)
+
+    if ok then
+        print(("[AutoFarm] Knocked House %d at %s"):format(num, os.date("%H:%M:%S")))
+    else
+        warn(("[AutoFarm] House %d knock failed: %s"):format(num, tostring(err)))
+    end
+    return ok
+end
+
+local function captureCooldown(num)
+    task.wait(1)
+    local secs = readDoorTimer(num)
+    if secs then
+        print(("[AutoFarm] House %d real cooldown: %dm %ds"):format(num, secs // 60, secs % 60))
+        return secs
+    end
+    print(("[AutoFarm] House %d: billboard unreadable, fallback %ds"):format(num, CONFIG.FallbackCooldown))
+    return CONFIG.FallbackCooldown
+end
+
+local function getScreenSize()
+    local cam = Workspace.CurrentCamera
+    if cam then return cam.ViewportSize end
+    return Vector2.new(1920, 1080)
+end
+
+local function getClickPos()
+    if CONFIG.EggScreenPos then return CONFIG.EggScreenPos end
+    local vp = getScreenSize()
+    return { X = math.floor(vp.X / 2), Y = math.floor(vp.Y / 2) }
+end
+
+local function tapOnce(x, y)
+    VirtualInputManager:SendMouseButtonEvent(x, y, 0, true, game, 1)
+    if CONFIG.TapHoldTime > 0 then
+        task.wait(CONFIG.TapHoldTime)
+    end
+    VirtualInputManager:SendMouseButtonEvent(x, y, 0, false, game, 1)
+end
+
+local function fireHatchRemote()
+    if not HatchRemote then return false end
+    local args = {
+        [1] = CONFIG.EggId,
+        [2] = CONFIG.EggAmount,
+    }
+    local ok, err = pcall(function()
+        HatchRemote:InvokeServer(unpack(args))
+    end)
+    if not ok then
+        warn("[AutoFarm] Hatch remote failed: " .. tostring(err))
+    end
+    return ok
+end
+
+local function tapBurst(x, y)
+    for i = 1, CONFIG.TapCount do
+        if not getgenv().HWAutoFarm or not idleStanding then return end
+        tapOnce(x, y)
+        if CONFIG.TapGap > 0 then
+            task.wait(CONFIG.TapGap)
+        end
+    end
+end
+
+local function hatchLoop()
+    print("[AutoFarm] Hatch loop started.")
+    local pos = getClickPos()
+    while getgenv().HWAutoFarm and idleStanding do
+        fireHatchRemote()
+        tapBurst(pos.X, pos.Y)
+        if CONFIG.HatchCycleDelay > 0 then
+            task.wait(CONFIG.HatchCycleDelay)
+        end
+    end
+    print("[AutoFarm] Hatch loop stopped.")
+end
+
+local StatusLabel = MainTab:CreateLabel("Status: idle")
+
+local function updateStatus(mode, house, readyAt)
+    if mode == "idle" then
+        StatusLabel:Set("Status: idle")
+    elseif mode == "waiting" then
+        local remaining = math.max(0, math.ceil(readyAt - time()))
+        StatusLabel:Set(("Status: hatching — House %d ready in %dm %ds"):format(
+            house, remaining // 60, remaining % 60))
+    elseif mode == "knocking" then
+        StatusLabel:Set(("Status: knocking House %d..."):format(house))
+    end
+end
+
+MainTab:CreateButton({
+    Name = "Reset Timers",
+    Callback = function()
+        for i = 1, CONFIG.MaxHouse do nextReady[i] = 0 end
+        idleStanding = false
+        Rayfield:Notify({ Title = "Timers Reset", Content = "All houses will be knocked on next pass.", Duration = 4 })
+    end,
+})
+
+MainTab:CreateButton({
+    Name = "Test Hatch (remote + 6 taps)",
+    Callback = function()
+        task.spawn(function()
+            fireHatchRemote()
+            local pos = getClickPos()
+            tapBurst(pos.X, pos.Y)
+            Rayfield:Notify({ Title = "Test Sent", Content = "Remote + 6 taps fired.", Duration = 3 })
+        end)
+    end,
+})
+
+MainTab:CreateToggle({
+    Name = "Auto Farm (Houses 1-8, live timers)",
+    CurrentValue = false,
+    Callback = function(Value)
+        getgenv().HWAutoFarm = Value
+
+        if not Value then
+            idleStanding = false
+            updateStatus("idle")
+            print("[AutoFarm] Stopped.")
+            return
+        end
+
+        task.spawn(function()
+            print("[AutoFarm] Started.")
+            syncTimersFromUI()
+
+            while getgenv().HWAutoFarm do
+                local now = time()
+                local house, readyAt = nextDueHouse()
+
+                if now >= readyAt then
+                    idleStanding = false
+
+                    updateStatus("knocking", house)
+                    if knockHouse(house) then
+                        nextReady[house] = time() + captureCooldown(house)
+                        task.wait(CONFIG.PostKnockDelay)
+                    else
+                        task.wait(CONFIG.RetryDelay)
+                    end
+                else
+                    if not idleStanding then
+                        local arrived = false
+                        for _ = 1, 10 do
+                            if not getgenv().HWAutoFarm then break end
+                            if teleportTo(CONFIG.IdlePosition) then
+                                local root = getRoot()
+                                if root and (root.Position - CONFIG.IdlePosition).Magnitude < 10 then
+                                    arrived = true
+                                    break
+                                end
+                            end
+                            task.wait(0.2)
+                        end
+
+                        if arrived then
+                            idleStanding = true
+                            task.wait(0.3)
+                            task.spawn(hatchLoop)
+                        else
+                            warn("[AutoFarm] Failed to reach idle spot — retrying next tick.")
+                        end
+                    end
+
+                    syncTimersFromUI()
+                    updateStatus("waiting", house, readyAt)
+                    task.wait(1)
+                end
+            end
+
+            idleStanding = false
+            updateStatus("idle")
+            print("[AutoFarm] Loop exited.")
+        end)
+    end,
+})
